@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import Head from 'next/head';
 
 export default function Home() {
-  const [website, setWebsite] = useState('https://kith.com');
+  const [website, setWebsite] = useState('');
   const [prompt, setPrompt] = useState('');
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -16,41 +16,49 @@ export default function Home() {
   });
   const [budget, setBudget] = useState('');
   const [toolsUsed, setToolsUsed] = useState([]);
+  const [collections, setCollections] = useState([]);
 
   // Welcome message
   useEffect(() => {
     setMessages([{
       role: 'assistant',
-      content: `👋 Welcome to your **Smart E-commerce Assistant**! 
-
-I'm your AI shopping companion powered by advanced AI. I can help you:
-
-🔍 **Find Products** - Search with filters, categories, and price ranges
-🌐 **Research** - Get product reviews and market information  
-💰 **Budget Planning** - Find the best deals within your budget
-🎯 **Personalized Recommendations** - Based on your style preferences
-📊 **Compare Products** - Side-by-side comparisons
-📦 **Check Inventory** - Real-time availability
-🚚 **Shipping Info** - Delivery estimates and costs
-
-**Try asking me:**
-- "Find men's sneakers under $200"
-- "What are the best hoodies for winter?"
-- "Compare these products: [product IDs]"
-- "Research the latest fashion trends"
-- "Recommend outfits for a wedding"
-
-What would you like to shop for today?`,
+      content: `👋 Welcome to your **Smart E-commerce Assistant**! \n\nI'm your AI shopping companion powered by advanced AI. I can help you:\n\n🔍 **Find Products** - Search with filters, categories, and price ranges\n🌐 **Research** - Get product reviews and market information  \n💰 **Budget Planning** - Find the best deals within your budget\n🎯 **Personalized Recommendations** - Based on your style preferences\n📊 **Compare Products** - Side-by-side comparisons\n📦 **Check Inventory** - Real-time availability\n🚚 **Shipping Info** - Delivery estimates and costs\n\n**Try asking me:**\n- "Find men's sneakers under $200"\n- "What are the best hoodies for winter?"\n- "Compare these products: [product IDs]"\n- "Research the latest fashion trends"\n- "Recommend outfits for a wedding"\n\nWhat would you like to shop for today?`,
       timestamp: new Date()
     }]);
   }, []);
 
-  const sendMessage = async () => {
-    if (!prompt.trim()) return;
+  const sendMessage = async (customPrompt) => {
+    console.log('sendMessage called with:', customPrompt);
+    console.log('Current prompt state:', prompt);
+    console.log('Current website state:', website);
+    
+    // Ignore event objects
+    if (customPrompt && typeof customPrompt === 'object' && (customPrompt.nativeEvent || customPrompt.target)) {
+      console.log('Ignoring event object');
+      return;
+    }
+    
+    const actualPrompt = customPrompt !== undefined ? customPrompt : prompt;
+    console.log('Actual prompt to send:', actualPrompt);
+    
+    if (!String(actualPrompt || '').trim()) {
+      console.log('Empty prompt, returning');
+      return;
+    }
+
+    if (!website.trim()) {
+      console.log('No website URL provided');
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: '❌ Please enter a valid Shopify store URL first!',
+        timestamp: new Date()
+      }]);
+      return;
+    }
 
     const userMessage = {
       role: 'user',
-      content: prompt,
+      content: actualPrompt,
       timestamp: new Date()
     };
 
@@ -59,12 +67,22 @@ What would you like to shop for today?`,
     setIsLoading(true);
 
     try {
+      console.log('Sending request to API with:', {
+        website,
+        prompt: actualPrompt,
+        userPreferences,
+        budget,
+        occasion: userPreferences.occasion,
+        showProducts,
+        startIndex
+      });
+      
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           website,
-          prompt,
+          prompt: actualPrompt,
           userPreferences,
           budget,
           occasion: userPreferences.occasion,
@@ -73,7 +91,9 @@ What would you like to shop for today?`,
         })
       });
 
+      console.log('Response status:', response.status);
       const data = await response.json();
+      console.log('Response data:', data);
 
       if (data.error) {
         throw new Error(data.error);
@@ -86,15 +106,17 @@ What would you like to shop for today?`,
         hasMore: data.hasMore,
         totalProducts: data.totalProducts,
         toolsUsed: data.toolsUsed || [],
+        collections: data.collections || [],
         timestamp: new Date()
       };
 
       setMessages(prev => [...prev, assistantMessage]);
       setToolsUsed(data.toolsUsed || []);
       setStartIndex(data.nextStartIndex || 0);
+      setCollections(data.collections || []);
 
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error in sendMessage:', error);
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: `❌ Sorry, I encountered an error: ${error.message}. Please try again.`,
@@ -120,31 +142,13 @@ What would you like to shop for today?`,
   const clearChat = () => {
     setMessages([{
       role: 'assistant',
-      content: `👋 Welcome to your **Smart E-commerce Assistant**! 
-
-I'm your AI shopping companion powered by advanced AI. I can help you:
-
-🔍 **Find Products** - Search with filters, categories, and price ranges
-🌐 **Research** - Get product reviews and market information  
-💰 **Budget Planning** - Find the best deals within your budget
-🎯 **Personalized Recommendations** - Based on your style preferences
-📊 **Compare Products** - Side-by-side comparisons
-📦 **Check Inventory** - Real-time availability
-🚚 **Shipping Info** - Delivery estimates and costs
-
-**Try asking me:**
-- "Find men's sneakers under $200"
-- "What are the best hoodies for winter?"
-- "Compare these products: [product IDs]"
-- "Research the latest fashion trends"
-- "Recommend outfits for a wedding"
-
-What would you like to shop for today?`,
+      content: `👋 Welcome to your **Smart E-commerce Assistant**! \n\nI'm your AI shopping companion powered by advanced AI. I can help you:\n\n🔍 **Find Products** - Search with filters, categories, and price ranges\n🌐 **Research** - Get product reviews and market information  \n💰 **Budget Planning** - Find the best deals within your budget\n🎯 **Personalized Recommendations** - Based on your style preferences\n📊 **Compare Products** - Side-by-side comparisons\n📦 **Check Inventory** - Real-time availability\n🚚 **Shipping Info** - Delivery estimates and costs\n\n**Try asking me:**\n- "Find men's sneakers under $200"\n- "What are the best hoodies for winter?"\n- "Compare these products: [product IDs]"\n- "Research the latest fashion trends"\n- "Recommend outfits for a wedding"\n\nWhat would you like to shop for today?`,
       timestamp: new Date()
     }]);
     setStartIndex(0);
     setShowProducts(false);
     setToolsUsed([]);
+    setCollections([]);
   };
 
   // Product Card Component
@@ -263,6 +267,25 @@ What would you like to shop for today?`,
     );
   };
 
+  // Collections Bar Component
+  const CollectionsBar = ({ collections }) => {
+    if (!collections || collections.length === 0) return null;
+    return (
+      <div className="mb-6 flex flex-wrap gap-2 items-center">
+        <span className="font-semibold text-gray-700 mr-2">Collections:</span>
+        {collections.map((col, idx) => (
+          <button
+            key={col.handle + idx}
+            className="bg-blue-100 hover:bg-blue-300 text-blue-800 px-3 py-1 rounded-full text-xs font-medium transition-colors"
+            onClick={() => sendMessage(`Show me products from the ${col.title} collection`)}
+          >
+            {col.title}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <Head>
@@ -371,6 +394,8 @@ What would you like to shop for today?`,
             <div className="bg-white rounded-xl shadow-lg overflow-hidden">
               {/* Chat Messages */}
               <div className="h-96 overflow-y-auto p-6 space-y-4">
+                {/* Show collections bar above the product grid/messages */}
+                <CollectionsBar collections={collections} />
                 {messages.map((message, index) => (
                   <div
                     key={index}
@@ -436,7 +461,12 @@ What would you like to shop for today?`,
                   <button
                     onClick={sendMessage}
                     disabled={isLoading || !prompt.trim()}
-                    className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className={`px-6 py-3 rounded-lg transition-colors ${
+                      isLoading || !prompt.trim() 
+                        ? 'bg-gray-400 text-gray-600 cursor-not-allowed' 
+                        : 'bg-blue-500 text-white hover:bg-blue-600'
+                    }`}
+                    title={!prompt.trim() ? 'Enter a message first' : ''}
                   >
                     {isLoading ? '⏳' : '🚀'} Send
                   </button>

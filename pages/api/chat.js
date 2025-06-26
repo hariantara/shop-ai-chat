@@ -166,8 +166,28 @@ function expandQuery(query) {
   return [query];
 }
 
+// Helper to validate Shopify store
+async function isValidShopifyStore(url) {
+  try {
+    const res = await fetch(url.replace(/\/$/, '') + '/products.json');
+    const data = await res.json();
+    return Array.isArray(data.products);
+  } catch {
+    return false;
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
+
+  // Check if API key is configured
+  if (!process.env.GOOGLE_API_KEY) {
+    console.error("❌ GOOGLE_API_KEY environment variable is not set");
+    return res.status(500).json({ 
+      error: "AI service is not properly configured. Please check the server configuration.",
+      details: "Missing Google API key"
+    });
+  }
 
   const { 
     website, 
@@ -183,6 +203,14 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing website or prompt" });
   }
 
+  // Store validation step
+  const isValid = await isValidShopifyStore(website);
+  if (!isValid) {
+    return res.status(400).json({
+      error: "This doesn't appear to be a valid Shopify store. Please check the URL or try another store."
+    });
+  }
+
   try {
     // Initialize the AI model with tools
     const model = genAI.getGenerativeModel({ 
@@ -195,12 +223,13 @@ export default async function handler(req, res) {
     });
 
     // Fetch products from the store
-    const products = await fetchStoreProducts(website);
+    const { products, collections } = await fetchStoreProducts(website);
     
     if (!products || products.length === 0) {
       return res.status(200).json({
         reply: "I couldn't find any products from this store. Please check the website URL or try a different store.",
         products: [],
+        collections: [],
         hasMore: false
       });
     }
@@ -287,6 +316,7 @@ Please provide a helpful response to the user based on these function results.`;
       res.status(200).json({
         reply: finalResponse.text(),
         products: finalProducts,
+        collections: collections,
         hasMore: functionProducts.length > 0 ? false : products.length > startIndex + 10,
         totalProducts: functionProducts.length > 0 ? functionProducts.length : products.length,
         toolsUsed: functionCalls.map(call => call.name),
@@ -301,6 +331,7 @@ Please provide a helpful response to the user based on these function results.`;
       res.status(200).json({
         reply: response.text(),
         products: displayProducts,
+        collections: collections,
         hasMore: products.length > startIndex + 10,
         totalProducts: products.length,
         nextStartIndex: products.length > startIndex + 10 ? startIndex + 10 : null
@@ -322,7 +353,7 @@ async function executeFunction(name, args, products, website) {
   
   switch (name) {
     case 'search_products':
-      return await searchProducts(products, args);
+      return await searchProducts(products, args, website);
     
     case 'web_search':
       return await webSearch(args.query);
@@ -350,30 +381,35 @@ async function executeFunction(name, args, products, website) {
 // Fetch products from store
 async function fetchStoreProducts(website) {
   const baseUrl = website.replace(/\/$/, "");
-  const endpoints = [
-    baseUrl + "/collections/all/products.json",
-    baseUrl + "/products.json",
-    baseUrl + "/collections/kids/products.json",
-    baseUrl + "/collections/kith-kids/products.json",
-    baseUrl + "/collections/mens/products.json",
-    baseUrl + "/collections/womens/products.json"
-  ];
-
   let allProducts = new Map();
+  let endpoints = [];
+  let collectionsList = [];
+
+  // Always try the main products endpoint
+  endpoints.push(baseUrl + "/products.json?currency=USD");
+
+  // Dynamically fetch all collections for this store
+  try {
+    const collectionsRes = await fetch(baseUrl + "/collections.json");
+    const collectionsData = await collectionsRes.json();
+    const collections = collectionsData.collections || [];
+    collectionsList = collections.map(col => ({ title: col.title, handle: col.handle }));
+    // Add each collection's products endpoint
+    for (const col of collections) {
+      endpoints.push(`${baseUrl}/collections/${col.handle}/products.json?currency=USD`);
+    }
+  } catch (err) {
+    console.log(`⚠️ Failed to fetch collections.json:`, err.message);
+  }
 
   for (let url of endpoints) {
-    // Always request USD if possible
-    url += url.includes('?') ? '&currency=USD' : '?currency=USD';
     try {
       console.log(`🔍 Fetching from: ${url}`);
       const response = await fetch(url);
       const json = await response.json();
-      
       const fetchedProducts = json.products || [];
-      
       if (fetchedProducts.length > 0) {
         console.log(`✅ Found ${fetchedProducts.length} products from ${url}`);
-        
         fetchedProducts.forEach(product => {
           if (!allProducts.has(product.id)) {
             allProducts.set(product.id, product);
@@ -388,8 +424,7 @@ async function fetchStoreProducts(website) {
 
   const products = Array.from(allProducts.values());
   console.log(`📦 Total unique products: ${products.length}`);
-  
-  return products;
+  return { products, collections: collectionsList };
 }
 
 // Build context for AI
@@ -419,7 +454,7 @@ Available Tools:
 }
 
 // Tool implementations
-async function searchProducts(products, args) {
+async function searchProducts(products, args, storeUrl) {
   const { query, category, price_range, brand } = args;
   
   console.log(`🔍 Searching products with:`, { query, category, price_range, brand });
@@ -499,7 +534,7 @@ async function searchProducts(products, args) {
 
   return {
     found: filtered.length,
-    products: filtered.slice(0, 20).map(formatProduct), // Return up to 20 products
+    products: filtered.slice(0, 20).map(p => formatProduct(p, storeUrl || args.website || '')),
     total: filtered.length,
     searchTerms: { query, category, price_range, brand }
   };
@@ -636,7 +671,7 @@ async function getShippingInfo(location, items) {
 }
 
 // Helper functions
-function formatProduct(product) {
+function formatProduct(product, storeUrl) {
   const price = product.variants?.[0]?.price || "N/A";
   let formattedPrice = "N/A";
   if (price !== "N/A") {
@@ -645,7 +680,8 @@ function formatProduct(product) {
       ? (numPrice / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
       : numPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
-
+  // Ensure storeUrl has no trailing slash
+  const base = storeUrl.replace(/\/$/, "");
   return {
     id: product.id,
     title: product.title,
@@ -654,7 +690,7 @@ function formatProduct(product) {
     productType: product.product_type || '',
     vendor: product.vendor || '',
     handle: product.handle || '',
-    productUrl: product.handle ? `https://kith.com/products/${product.handle}` : null,
+    productUrl: product.handle ? `${base}/products/${product.handle}` : null,
     available: product.variants?.[0]?.available || false
   };
 }
